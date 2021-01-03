@@ -1,0 +1,16 @@
+package deriving
+
+brief = "provide some deriving elab"
+version = "0.1.0"
+readme = "README.md"
+license = "MIT"
+author = "κeen"
+maintainer = "κeen"
+sourceloc = "https://github.com/KeenS/idris-deriving"
+bugtracker = "https://github.com/KeenS/idris-deriving/issues"
+
+
+sourcedir = src
+modules = Deriving, Tests.Deriving
+tests = Tests.Deriving.test
+pkgs = contrib
