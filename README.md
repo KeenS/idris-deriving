@@ -2,7 +2,7 @@
 
 deriving statement implemented in `Elab` .
 
-Currently, only show for non-generic types are supported.
+Currently, only `Show` is supported.
 
 
 ```idris
@@ -15,6 +15,9 @@ data Janken = Gu | Choki | Pa
 %runElab derive [Show] `{{Janken}}
 
 data StringMaybe = Some String | None
+data Result a b = Ok a | Err b
 
-%runElab derive [Show] `{{StringMaybe}}
+%runElab do
+  derive [Show] `{{StringMaybe}}
+  derive [Show] `{{Result}}
 ```

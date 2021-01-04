@@ -11,11 +11,11 @@ data Janken = Gu | Choki | Pa
 
 data StringMaybe = Some String | None
 
-%runElab derive [Show] `{{StringMaybe}}
-
 data Result a b = Ok a | Err b
 
-%runElab derive [Show] `{{Result}}
+%runElab do
+  derive [Show] `{{StringMaybe}}
+  derive [Show] `{{Result}}
 
 testJanken : IO ()
 testJanken = do
