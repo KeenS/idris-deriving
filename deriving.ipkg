@@ -11,6 +11,6 @@ bugtracker = "https://github.com/KeenS/idris-deriving/issues"
 
 
 sourcedir = src
-modules = Deriving, Tests.Deriving
+modules = Deriving, Deriving.Show, Deriving.Utils, Tests.Deriving
 tests = Tests.Deriving.test
 pkgs = contrib
