@@ -1,15 +1,11 @@
 import Language.Reflection.Utils
+import Debug.Trace
 
 showFQN : TTName -> String
 showFQN (UN n) = n
 showFQN (MN i s) = "{" ++ s ++ "_" ++ (show i) ++ "}"
-showFQN (NS tn ns) = (concatWith "." ns) ++ "." ++ (showFQN tn)
+showFQN (NS tn ns) = (concat $ intersperse "." ns) ++ "." ++ (showFQN tn)
 -- showFQN (SN _) = "unsuported"
-where
-  concatWith : String -> List String -> String
-  concatWith sep [] = ""
-  concatWith sep [x] = x
-  concatWith sep (x :: xs) = x ++ sep ++ (concatWith sep xs)
 
 namespace CtorArg
   getFunArg : CtorArg -> FunArg
@@ -22,17 +18,22 @@ namespace TyConArg
   getFunArg (TyConIndex x) = x
 
 
-makeTypeParameters : TTName -> Datatype -> Elab (List FunArg)
-makeTypeParameters name dt = do
-  let tyconArgs = map getFunArg $ tyConArgs dt
-  let typeParameter = tyconArgs
-  instanceParameter <- sequence $ map makeInstanceParameter tyconArgs
+makeTypeParametersFrom : TTName -> List FunArg -> Elab (List FunArg)
+makeTypeParametersFrom ifc tyconArgs = do
+  let typeParameter = map (record {plicity = Implicit}) tyconArgs
+  instanceParameter <- sequence $ map makeInstanceParameter (reverse tyconArgs)
   pure $ typeParameter ++ instanceParameter
 where
   makeInstanceParameter : FunArg -> Elab FunArg
-  makeInstanceParameter (MkFunArg n type plicity erasure) = do
+  makeInstanceParameter arg = do
     inst <- gensym "inst"
-    pure $ MkFunArg inst (RApp (Var name) (Var n)) plicity erasure
+    pure $ MkFunArg inst (RApp (Var ifc) (Var (name arg))) Constraint NotErased
+
+makeTypeParameters : TTName -> Datatype -> Elab (List FunArg)
+makeTypeParameters ifc dt = do
+  let tyconArgs = map getFunArg $ tyConArgs dt
+  makeTypeParametersFrom ifc (reverse tyconArgs)
+
 
 wrapWithParameters : Raw -> (List FunArg) -> Raw
 wrapWithParameters  body args =
@@ -40,35 +41,74 @@ wrapWithParameters  body args =
 
 wrapWithPatBind : Raw -> (List FunArg) -> Raw
 wrapWithPatBind body args =
-  foldl (\acc,arg => RBind (name arg) (PVar $ type arg) acc) body args
+  foldr (\arg,acc => RBind (name arg) (PVar $ type arg) acc) body args
 
-getInstanceFor : TTName -> TTName -> Raw -> Elab Raw
-getInstanceFor fname ifc ty = do
+||| query the instance of the interface to idris
+lookupInstanceFor : TTName -> TTName -> Raw -> Elab Raw
+lookupInstanceFor fname ifc ty = do
     (inst, _) <- runElab (RApp (Var ifc) ty) $ do
       resolveTC fname
     -- TT -> Raw
     let Just inst = forget inst
     pure inst
 
-genClause : TTName -> (TTName, List CtorArg, Raw) -> Elab (FunClause Raw)
-genClause fname (cname, args, _) = do
+||| find an instance of the interface in listed arguments
+findInstanceFor : Maybe Nat -> List FunArg -> Datatype-> Maybe TTName
+findInstanceFor Nothing  _        dt = Nothing
+findInstanceFor (Just i) tyParams dt =
+  let pad = length $ tyConArgs dt in
+  map name $ index' (minus (2 * pad)  (1 + i)) tyParams
+
+
+lookupCtorExact : TTName -> Elab TTName
+lookupCtorExact ifc = do
+  ifcData <- lookupDatatypeExact ifc
+  let [(ctor, _, _)] = constructors ifcData
+  pure ctor
+
+resultType : Datatype -> Raw
+resultType (MkDatatype name tyConArgs tyConRes constructors) = wrapWithParameters (Var name) (map getFunArg tyConArgs)
+
+argsOfTyConArgs : List FunArg -> Datatype -> List FunArg
+argsOfTyConArgs args dt =
+  let pad = length $ tyConArgs dt in
+  take pad args
+
+argsExceptTyConArgs : List FunArg -> Datatype -> List FunArg
+argsExceptTyConArgs args dt =
+  let pad = length $ tyConArgs dt in
+  drop pad args
+
+
+
+ifc : TTName
+ifc = `{{Prelude.Show.Show}}
+
+genClause : TTName -> Datatype -> (TTName, List CtorArg, Raw) -> Elab (FunClause Raw)
+genClause fname dt (cname, ctorArgs, _) = do
   let NS (UN cnameStr) _ = cname
-  let args = map getFunArg args
+  let ctorArgs = map getFunArg ctorArgs
+  tyParams <- makeTypeParametersFrom `{{Prelude.Show.Show}} $ argsOfTyConArgs ctorArgs dt
+  let tyVars = tyParams ++ (argsExceptTyConArgs ctorArgs dt)
+  -- (Ctor x y ...)
+  let ctor = wrapWithParameters (Var cname) ctorArgs
   -- show (Ctor x y ...)
-  let funClause = wrapWithParameters (Var cname) args
-  -- wrap with patbind
-  let funClause = wrapWithPatBind (RApp (Var fname) funClause) args
+  let funClause = wrapWithPatBind (RApp (wrapWithParameters (Var fname) tyParams) ctor) tyVars
+  -- perhaps we should test if the arg isn't erased too
+  let effectiveArgs = filter (\arg => (type arg) /= RType) ctorArgs
+  let effectiveArgs = map (\arg => (findIndex (\t => (type arg) == (Var (name t))) ctorArgs, arg)) effectiveArgs
   -- = "Ctor" ++ " " ++ (show x) ++ " " ++ (show y) ...
-  showedArgs <- sequence $ map (\arg => showArg fname arg) args
+  showedArgs <- sequence $ map (\(i, arg) => showArg i tyParams arg) effectiveArgs
   let funBody = foldl (\acc, arg => concat acc arg) (RConstant (Str cnameStr)) showedArgs
-  -- wrap with patbind
-  let funBody = wrapWithPatBind funBody args
+  let funBody = wrapWithPatBind funBody tyVars
   pure $ MkFunClause funClause funBody
 where
-  showArg : TTName -> FunArg -> Elab Raw
-  showArg fname arg = do
+  showArg : Maybe Nat -> List FunArg -> FunArg -> Elab Raw
+  showArg i tyParams arg = do
     -- get the instance of `Show type`
-    inst <- getInstanceFor fname `{{Prelude.Show.Show}} (type arg)
+    inst <- case findInstanceFor i tyParams dt of
+        Just name => pure (Var name)
+        Nothing   => lookupInstanceFor fname ifc (type arg)
     -- `show type (instance of Show type) arg`
     pure (RApp (RApp (RApp (Var `{{Prelude.Show.show}}) (type arg)) inst) (Var (name arg)))
   concat : Raw -> Raw -> Raw
@@ -76,33 +116,33 @@ where
     let fconcat = (Var `{{Prelude.Strings.(++)}}) in
     (RApp (RApp fconcat (RApp (RApp fconcat l) (RConstant (Str " "))))) r
 
-genShow : TTName -> Datatype -> Elab TTName
-genShow tname dt = do
+genShow : TTName -> Datatype -> List FunArg -> Elab TTName
+genShow tname dt tyParams = do
   fshow <- gensym $ (showFQN tname) ++ ".show"
   let fshow = SN $ MethodN fshow
   x <- gensym "x"
   -- show : (x: name) -> String
-  let ty = Declare fshow [MkFunArg x (Var tname) Explicit Erased] (RConstant StrType)
-  clauses <- sequence $ map (genClause fshow) $ constructors dt
+  let ty = Declare fshow (tyParams ++ [MkFunArg x (resultType dt) Explicit NotErased]) (RConstant StrType)
+  clauses <- sequence $ map (genClause fshow dt) $ constructors dt
   let f = DefineFun fshow clauses
   declareType ty
   defineFunction f
   pure fshow
 
-genShowPrec : TTName -> TTName -> Datatype -> Elab TTName
-genShowPrec tname fshow dt = do
+genShowPrec : TTName -> TTName -> Datatype -> List FunArg -> Elab TTName
+genShowPrec tname fshow dt tyParams = do
   fshowPrec <- gensym $ (showFQN tname) ++ ".showPrec"
   let fshowPrec = SN $ MethodN fshowPrec
   let prec = `{{Prelude.Show.Prec}}
   x <- gensym "x"
   ign <- gensym "ignore"
   -- showPrec : Prec -> name -> String
-  let funParam = [MkFunArg ign (Var prec) Explicit Erased, MkFunArg x (Var tname) Explicit Erased]
+  let funParam = tyParams ++ [MkFunArg ign (Var prec) Explicit NotErased, MkFunArg x (resultType dt) Explicit NotErased]
   let ty = Declare fshowPrec funParam (RConstant StrType)
   -- showPrec _ x =
   let clauseArg  = wrapWithPatBind (wrapWithParameters (Var fshowPrec) funParam) funParam
   -- = show x
-  let clauseBody = wrapWithPatBind (RApp (Var fshow) (Var x)) funParam
+  let clauseBody = wrapWithPatBind (RApp (wrapWithParameters (Var fshow) tyParams) (Var x)) funParam
   let clause = MkFunClause clauseArg clauseBody
   let f = DefineFun fshowPrec [clause]
   declareType ty
@@ -113,23 +153,26 @@ genShowPrec tname fshow dt = do
 export
 deriveShow : TTName -> Datatype -> Elab ()
 deriveShow name dt = do
-  let ifc = `{{Prelude.Show.Show}}
   let inst = SN $ ImplementationN ifc [showFQN name]
-
-  -- tyParams <- makeTypeParameters ifc dt
+  tyParams <- makeTypeParameters ifc dt
 
   -- define show
-  fshow <- genShow name dt
+  fshow <- genShow name dt tyParams
   -- define showPrec
-  fshowPrec <- genShowPrec name fshow dt
+  fshowPrec <- genShowPrec name fshow dt tyParams
 
   -- get the constructor of Show
-  ifcData <- lookupDatatypeExact ifc
-  let [(ctor, _, _)] = constructors ifcData
+  ctor <- lookupCtorExact ifc
   -- showInst : Show name
-  let instTy = Declare inst [] (RApp (Var ifc) (Var name))
+  let instTy = Declare inst tyParams (RApp (Var ifc) (resultType dt))
   -- showInst = ctor show showPrec
-  let instClause = MkFunClause (Var inst) (RApp (RApp (RApp (Var ctor) (Var name)) (Var fshow)) (Var fshowPrec))
+  let clauseArg = (Var inst)
+  let clauseArg = wrapWithPatBind (wrapWithParameters clauseArg tyParams) tyParams
+  let fshow     = wrapWithParameters (Var fshow) tyParams
+  let fshowPrec = wrapWithParameters (Var fshowPrec) tyParams
+  let clauseBody = RApp (RApp (RApp (Var ctor) (resultType dt)) fshow) fshowPrec
+  let clauseBody = wrapWithPatBind clauseBody tyParams
+  let instClause = MkFunClause clauseArg clauseBody
   let instF = DefineFun inst [instClause]
   declareType instTy
   defineFunction instF
@@ -153,9 +196,21 @@ where
     pure $ NS (UN un) ns
   quorifyName n = pure n
 
--- Show List -> ty -> Show ty -> Show List ty
--- Show Either -> String -> Int -> Show String -> Show Int -> Show (Either String Int)
-
 export
 Show : Deriver
 Show = MkDeriver deriveShow
+
+-- hoge : Elab ()
+-- hoge = ?hole
+-- dt <- lookupDatatypeExact `{{Main.Result}}
+-- tyParams <- makeTypeParameters ifc dt
+-- let ctors = constructors dt
+-- let ctor = index 0 ctors
+-- let args = map getFunArg (fst (snd ctor))
+-- let effectiveArgs = filter (\arg => (type arg) /= RType) args
+-- let effectiveArgs = map (\arg => (findIndex (\t => (type arg) == (Var (name t))) args, arg)) effectiveArgs
+-- let effectiveArg = index 0 effectiveArgs
+-- let ret = findInstanceFor (fst effectiveArg) tyParams
+-- inst <- lookupInstanceFor `{{hoge}} ifc (type (snd effectiveArg))
+-- let body = (RApp (RApp (RApp (Var `{{Prelude.Show.show}}) (type (snd effectiveArg))) inst) (Var (name (snd effectiveArg))))
+-- debug {a=()}

@@ -13,6 +13,10 @@ data StringMaybe = Some String | None
 
 %runElab derive [Show] `{{StringMaybe}}
 
+data Result a b = Ok a | Err b
+
+%runElab derive [Show] `{{Result}}
+
 testJanken : IO ()
 testJanken = do
   assertEquals (show Gu) "Gu"
@@ -26,8 +30,15 @@ testStringMaybe = do
   assertEquals (show None) "None"
   pure()
 
+testResult : IO ()
+testResult = do
+  assertEquals (show $ the (Result String Int) $ Ok "foo") "Ok \"foo\""
+  assertEquals (show $ the (Result String Int) $ Err 1)  "Err 1"
+  pure()
+
 export
 test : IO ()
 test = do
   testJanken
   testStringMaybe
+  testResult
