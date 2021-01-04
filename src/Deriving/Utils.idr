@@ -83,3 +83,11 @@ argsExceptTyConArgs args dt =
   drop pad args
 
 
+rename : FunArg -> Elab FunArg
+rename arg = do
+  x <- gensym "arg"
+  pure $ record {name = x} arg
+
+-- TOOD: care about depedent products
+renameAll : List FunArg -> Elab (List FunArg)
+renameAll args = sequence $ map rename args

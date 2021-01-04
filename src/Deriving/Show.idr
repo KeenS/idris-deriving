@@ -13,7 +13,7 @@ genClause : TTName -> Datatype -> (TTName, List CtorArg, Raw) -> Elab (FunClause
 genClause fname dt (cname, ctorArgs, _) = do
   let NS (UN cnameStr) _ = cname
   let ctorArgs = map getFunArg ctorArgs
-  tyParams <- makeTypeParametersFrom `{{Prelude.Show.Show}} $ argsOfTyConArgs ctorArgs dt
+  tyParams <- makeTypeParametersFrom ifc $ argsOfTyConArgs ctorArgs dt
   let tyVars = tyParams ++ (argsExceptTyConArgs ctorArgs dt)
   -- (Ctor x y ...)
   let ctor = wrapWithParameters (Var cname) ctorArgs

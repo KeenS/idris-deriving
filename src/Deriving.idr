@@ -1,6 +1,7 @@
 module Deriving
 
 import Deriving.Show
+import Deriving.Eq
 
 public export
 data Deriver = MkDeriver (TTName -> Datatype -> Elab ())
@@ -21,3 +22,7 @@ where
 export
 Show : Deriver
 Show = MkDeriver deriveShow
+
+export
+Eq : Deriver
+Eq = MkDeriver deriveEq
