@@ -69,8 +69,9 @@ testEqStringMaybe = do
 
 testShowResult : IO ()
 testShowResult = do
-  assertEquals (show $ the (Result String Int) $ Ok "foo") "Ok \"foo\""
-  assertEquals (show $ the (Result String Int) $ Err 1)  "Err 1"
+  let t = the (Result String Int)
+  assertEquals (show $ t (Ok "foo")) "Ok \"foo\""
+  assertEquals (show $ t (Err 1))  "Err 1"
   pure()
 
 testEqResult : IO ()
